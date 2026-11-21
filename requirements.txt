@@ -54,6 +54,7 @@ pytz==2026.3.post1
 # a separate, unpinned SDK installer, so the portable desktop
 # build shipped without them and any provider call failed. Bundle them so the
 # desktop app works out of the box.
+anthropic==2.12.0
 openai==3.8.0
 google-genai==2.22.0
 dashscope==1.27.4

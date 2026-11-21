@@ -22,6 +22,7 @@ class ProviderType(Enum):
     OPENAI = "openai"        # OpenAI
     GEMINI = "gemini"        # Google Gemini
     SILICONFLOW = "siliconflow"  # 硅基流动
+    ANTHROPIC = "anthropic"  # Anthropic Claude (official SDK, BYOK)
 
 @dataclass
 class ModelInfo:
@@ -800,6 +801,112 @@ class SiliconFlowProvider(LLMProvider):
         """获取硅基流动可用模型（内置常用名单；设置页会再按账号实时拉取）"""
         return _catalog_model_infos(ProviderType.SILICONFLOW)
 
+# --- Anthropic Claude -------------------------------------------------------
+# Native Claude provider on the official ``anthropic`` SDK (Messages API).
+# Key: ``anthropic_api_key`` setting or the ANTHROPIC_API_KEY env var (backend
+# only). Model: ``model_name`` setting or CLAUDE_MODEL. Effort: CLAUDE_EFFORT.
+CLAUDE_DEFAULT_MODEL = "claude-haiku-5-5"
+CLAUDE_DEFAULT_MAX_TOKENS = 32000
+CLAUDE_DEFAULT_EFFORT = "low"
+CLAUDE_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+CLAUDE_MODELS = (
+    ("claude-haiku-5-5", "Claude Haiku 5.5"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+    ("claude-opus-5-5", "Claude Opus 5.5"),
+)
+# Sampling knobs are rejected by current Claude models; OpenAI-only knobs never apply.
+_CLAUDE_DROPPED_KWARGS = {"stream", "temperature", "top_p", "top_k", "response_format",
+                          "max_completion_tokens", "presence_penalty", "frequency_penalty", "seed"}
+
+
+def claude_effort() -> str:
+    value = (os.getenv("CLAUDE_EFFORT") or CLAUDE_DEFAULT_EFFORT).strip().lower()
+    return value if value in CLAUDE_EFFORT_LEVELS else CLAUDE_DEFAULT_EFFORT
+
+
+class ClaudeProvider(LLMProvider):
+    """Anthropic Claude via the official SDK. Streams every request so long
+    analyses never hit an HTTP read timeout; the SDK retries 408/429/5xx."""
+
+    def __init__(self, api_key: str, model_name: str = CLAUDE_DEFAULT_MODEL, **kwargs):
+        api_key = (api_key or os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        model_name = (model_name or os.getenv("CLAUDE_MODEL") or CLAUDE_DEFAULT_MODEL).strip()
+        super().__init__(api_key, model_name, **kwargs)
+        self.base_url = normalize_base_url(kwargs.get("base_url") or os.getenv("ANTHROPIC_BASE_URL")) or None
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError("请安装anthropic: pip install anthropic")
+        client_kwargs: Dict[str, Any] = {
+            "api_key": api_key or "missing-key",
+            "max_retries": LLM_SDK_MAX_RETRIES + 1,
+            "timeout": anthropic.Timeout(LLM_READ_TIMEOUT_SEC, connect=LLM_CONNECT_TIMEOUT_SEC),
+        }
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        self.client = anthropic.Anthropic(**client_kwargs)
+
+    def _request(self, model: str, full_input: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        extra = {k: v for k, v in kwargs.items() if k not in _CLAUDE_DROPPED_KWARGS}
+        max_tokens = extra.pop("max_tokens", None) or CLAUDE_DEFAULT_MAX_TOKENS
+        request: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": int(max_tokens),
+            "messages": [{"role": "user", "content": full_input}],
+            "output_config": {"effort": claude_effort()},
+        }
+        system = extra.pop("system", None)
+        if system:
+            request["system"] = system
+        request.update(extra)
+        return request
+
+    def call(self, prompt: str, input_data: Any = None, **kwargs) -> LLMResponse:
+        try:
+            model = self.request_model()
+            full_input = self._build_full_input(prompt, input_data)
+            request = self._request(model, full_input, kwargs)
+            timeout = _budget_request_timeout(LLM_READ_TIMEOUT_SEC)
+            if timeout is not None:
+                request["timeout"] = timeout
+            with self.client.messages.stream(**request) as stream:
+                message = stream.get_final_message()
+            if message.stop_reason == "refusal":
+                error = RuntimeError("Claude declined this request (stop_reason=refusal)")
+                error.status_code = 400
+                raise error
+            text = "".join(block.text for block in message.content if block.type == "text")
+            usage = {
+                "prompt_tokens": message.usage.input_tokens,
+                "completion_tokens": message.usage.output_tokens,
+                "total_tokens": message.usage.input_tokens + message.usage.output_tokens,
+            }
+            logger.info("LLM usage model=%s prompt_tokens=%s completion_tokens=%s",
+                        sanitize_model(model), usage["prompt_tokens"], usage["completion_tokens"])
+            finish = {"end_turn": "stop", "max_tokens": "length"}.get(message.stop_reason, message.stop_reason)
+            return LLMResponse(content=text, usage=usage, model=model, finish_reason=finish)
+        except Exception as e:
+            from backend.core.job_budget import promote_if_budget_spent
+            promote_if_budget_spent(e)
+            logger.error("Claude调用失败: %s", sanitize_exception_text(e))
+            raise log_safe_exception(e) from None
+
+    def test_connection(self) -> bool:
+        if not self.api_key or len(self.api_key) < 10:
+            logger.error("Anthropic API Key为空或过短")
+            return False
+        try:
+            response = self.call("Reply with OK.", max_tokens=64)
+            return bool(str(response.content or "").strip())
+        except Exception as e:
+            logger.error("Claude连接测试失败: %s", sanitize_exception_text(e))
+            return False
+
+    def get_available_models(self) -> List[ModelInfo]:
+        return [ModelInfo(name=n, display_name=d, provider=ProviderType.ANTHROPIC, max_tokens=CLAUDE_DEFAULT_MAX_TOKENS)
+                for n, d in CLAUDE_MODELS]
+
+
 class LLMProviderFactory:
     """LLM提供商工厂"""
     
@@ -808,6 +915,7 @@ class LLMProviderFactory:
         ProviderType.OPENAI: OpenAIProvider,
         ProviderType.GEMINI: GeminiProvider,
         ProviderType.SILICONFLOW: SiliconFlowProvider,
+        ProviderType.ANTHROPIC: ClaudeProvider,
     }
     
     @classmethod

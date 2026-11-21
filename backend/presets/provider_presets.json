@@ -728,12 +728,12 @@
     "anthropic": {
       "display_name": "Anthropic",
       "short_name": "Anthropic",
-      "group": "popular",
+      "group": "more",
       "protocol": "anthropic-messages",
       "base_url": "https://api.anthropic.com",
       "docs_url": "https://console.anthropic.com/settings/keys",
       "api_key_setting": "anthropic_api_key",
-      "hint": "Anthropic Claude (official API). Bring your own key from console.anthropic.com; usage is billed per token by Anthropic.",
+      "hint": "Anthropic Claude。预置协议为 Anthropic Messages。",
       "kind": "preset",
       "candidates": {
         "analysis": [
@@ -755,8 +755,7 @@
         "claude-haiku-5-5",
         "claude-sonnet-5-5",
         "claude-opus-5-5"
-      ],
-      "placeholder": "sk-ant-…"
+      ]
     },
     "grok": {
       "display_name": "Grok（xAI）",

@@ -44,6 +44,7 @@ test('the import card walks provider, key and connect, and the example path need
     saving: false,
     error: '',
     selectProvider(provider) { calls.push(['provider', provider]) },
+    ensureCatalogProvider(provider) { calls.push(['catalog', provider]) },
     setKey(value) { calls.push(['key', value]) },
     connect: async () => { calls.push(['connect']); return { ok: true } },
   }
@@ -75,9 +76,11 @@ test('the import card walks provider, key and connect, and the example path need
     assert.equal(host.textContent.includes('刚才的链接或文件会留着'), true)
     assert.equal(events.some(item => item.event === 'setup_presented' && item.props.placement === 'import_card' && item.props.trigger === 'initial'), true)
     const radios = [...host.querySelectorAll('[role="radio"]')]
-    assert.deepEqual(radios.map(node => node.getAttribute('aria-checked')), ['true', 'false', 'false', 'false', 'false'])
-    assert.equal(radios[0].textContent.includes('88API'), true)
-    assert.equal(radios[3].textContent.includes('DeepSeek'), true)
+    assert.deepEqual(radios.map(node => node.getAttribute('aria-checked')), ['true', 'false', 'false', 'false', 'false', 'false'])
+    assert.equal(radios[0].textContent.includes('Anthropic Claude'), true)
+    assert.equal(radios[1].textContent.includes('88API'), true)
+    assert.equal(radios[4].textContent.includes('DeepSeek'), true)
+    await act(async () => { radios[1].click() })
     await act(async () => { button(host, '先用示例视频看看效果').click() })
     assert.deepEqual(examples, ['open'])
     await act(async () => { button(host, '下一步').click() })

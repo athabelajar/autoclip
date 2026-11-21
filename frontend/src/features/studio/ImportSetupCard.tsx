@@ -12,6 +12,9 @@ import { useQuickConnect } from '../settings/useQuickConnect'
 import { PROVIDERS, recommendedSetupProviders, type ProviderKey } from '../settings/providers'
 
 const STEPS = ['provider', 'key', 'connect'] as const
+// Native Claude (official Anthropic API) is offered first in this fork.
+const CLAUDE = 'anthropic' as const
+type Choice = ProviderKey | typeof CLAUDE
 type Step = (typeof STEPS)[number]
 
 const STEP_LABEL: Record<Step, () => string> = {
@@ -34,7 +37,7 @@ export default function ImportSetupCard({ onExample, exampleBusy = false, keptMa
   const connect = useQuickConnect('import_card')
   const providers = recommendedSetupProviders()
   const [step, setStep] = useState<Step>('provider')
-  const [provider, setProvider] = useState<ProviderKey>(providers[0] || 'api88')
+  const [provider, setProvider] = useState<Choice>(CLAUDE)
   const [apiKey, setApiKey] = useState('')
   const presentation = useRef('')
   useEffect(() => {
@@ -54,11 +57,14 @@ export default function ImportSetupCard({ onExample, exampleBusy = false, keptMa
       provider: telemetryProvider(provider),
     })
   }
-  const preset = PROVIDERS[provider]
+  const preset = provider === CLAUDE
+    ? { short: 'Anthropic Claude', placeholder: 'sk-ant-…', sponsor: undefined }
+    : PROVIDERS[provider]
   const index = STEPS.indexOf(step)
   const next = () => {
     if (step === 'provider') {
-      connect.selectProvider(provider)
+      if (provider === CLAUDE) connect.ensureCatalogProvider(CLAUDE, undefined, true)
+      else connect.selectProvider(provider)
       done('provider')
       setStep('key')
       return
@@ -76,6 +82,7 @@ export default function ImportSetupCard({ onExample, exampleBusy = false, keptMa
     if (result.ok && !result.validationFailed) done('connect')
   }
   const openKey = () => {
+    if (provider === CLAUDE) { openExternalLink('https://console.anthropic.com/settings/keys'); return }
     const sponsor = preset.sponsor
     if (!sponsor) return
     trackSponsorLinkOpened({ sponsor: sponsor.id, target: 'register', placement: 'import_card' })
@@ -91,6 +98,13 @@ export default function ImportSetupCard({ onExample, exampleBusy = false, keptMa
       {STEPS.map((name, at) => <li key={name} data-current={name === step ? 'true' : undefined} data-done={at < index ? 'true' : undefined}>{at + 1} {STEP_LABEL[name]()}</li>)}
     </ol>
     {step === 'provider' && <div className="ac-choice-list" role="radiogroup" aria-label={t('选择服务商')}>
+      <button type="button" role="radio" className="ac-choice" aria-checked={provider === CLAUDE} onClick={() => setProvider(CLAUDE)}>
+        <span className="ac-choice-text">
+          <b>Anthropic Claude</b>
+          <span>Official Claude API. Paste a key from console.anthropic.com; usage is billed per token by Anthropic.</span>
+        </span>
+        {provider === CLAUDE && <Icon.Check />}
+      </button>
       {providers.map(id => {
         const row = PROVIDERS[id]
         return <button key={id} type="button" role="radio" className="ac-choice" aria-checked={provider === id} onClick={() => setProvider(id)}>
@@ -105,7 +119,7 @@ export default function ImportSetupCard({ onExample, exampleBusy = false, keptMa
     {step === 'key' && <label className="studio-field">
       {t('API 密钥')}
       <input type="password" autoComplete="new-password" aria-label={t('API 密钥')} placeholder={preset.placeholder || 'sk-…'} value={apiKey} onChange={event => setApiKey(event.target.value)} />
-      {preset.sponsor && <button type="button" className="studio-link" onClick={openKey}>{t('获取 API Key')}</button>}
+      {(preset.sponsor || provider === CLAUDE) && <button type="button" className="studio-link" onClick={openKey}>{t('获取 API Key')}</button>}
     </label>}
     {step === 'connect' && <div>
       <p className="studio-muted">{t('连接会先做一次快速检查，通过后保存。')}</p>

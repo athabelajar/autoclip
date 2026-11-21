@@ -736,7 +736,11 @@
       "hint": "Anthropic Claude。预置协议为 Anthropic Messages。",
       "kind": "preset",
       "candidates": {
-        "analysis": [],
+        "analysis": [
+          "claude-haiku-5-5",
+          "claude-sonnet-5-5",
+          "claude-opus-5-5"
+        ],
         "vision": [],
         "asr": [],
         "image": []
@@ -745,6 +749,12 @@
       "locked": true,
       "capabilities": [
         "language"
+      ],
+      "default_model": "claude-haiku-5-5",
+      "catalog": [
+        "claude-haiku-5-5",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5"
       ]
     },
     "grok": {

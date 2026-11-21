@@ -244,7 +244,56 @@ def _non_stream_completion(payload: Any) -> bool:
     return bool(_completion_text(choices[0].get('message')))
 
 
+def _is_anthropic_base(base: str) -> bool:
+    host = (urlparse(base or '').hostname or '').lower()
+    return host == 'anthropic.com' or host.endswith('.anthropic.com')
+
+
+def _anthropic_message(base: str, api_key: str, model: str, content: str, max_tokens: int, timeout: float):
+    """One Claude Messages call through the official SDK.
+
+    Returns ``(status, body_text, reply_text, error_name)``; ``status`` is None on a
+    network failure (``error_name`` is then ``TimeoutError`` or ``ConnectionError``).
+    """
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key or 'EMPTY', base_url=base.rstrip('/'),
+                                 timeout=timeout, max_retries=0)
+    try:
+        message = client.messages.create(
+            model=model, max_tokens=max_tokens,
+            messages=[{'role': 'user', 'content': content}],
+        )
+    except anthropic.APITimeoutError:
+        return None, '', '', 'TimeoutError'
+    except anthropic.APIConnectionError:
+        return None, '', '', 'ConnectionError'
+    except anthropic.APIStatusError as exc:
+        try:
+            body = exc.response.text or ''
+        except Exception:  # noqa: BLE001
+            body = str(exc)
+        return exc.status_code, body, '', ''
+    reply = ''.join(block.text for block in message.content if block.type == 'text')
+    return 200, '', reply, ''
+
+
+def _probe_anthropic(base: str, api_key: str, model: str) -> Optional[ClassifiedUpstreamError]:
+    from backend.core.upstream_errors import symbolic_error_code
+    status, body, _reply, error_name = _anthropic_message(base, api_key, model, 'ok', 64, PROBE_TIMEOUT)
+    if status is None:
+        return _with_detail(_classify(None, '', error_name=error_name))
+    upstream = symbolic_error_code(body[:4000]) if body else ''
+    if status == 429 or status == 529 or 500 <= status <= 599:
+        kind = UpstreamErrorType.RATE_LIMITED if status == 429 else UpstreamErrorType.UPSTREAM_UNAVAILABLE
+        return _with_detail(_as_type(kind), status, upstream_code=upstream)
+    if status >= 400:
+        return _with_detail(_classify(status, body[:4000]), status, upstream_code=upstream)
+    return None
+
+
 def _probe(base: str, api_key: str, model: str) -> Optional[ClassifiedUpstreamError]:
+    if _is_anthropic_base(base):
+        return _probe_anthropic(base, api_key, model)
     import httpx
     from backend.core.llm_providers import guarded_chat_kwargs, http_chat_body, token_param_kwargs
     from backend.core.upstream_errors import symbolic_error_code
@@ -565,6 +614,14 @@ def _trial_estimate(avg_ms: int) -> tuple[int, float]:
 def _trial_once(base: str, api_key: str, model: str, full_input: str) -> dict:
     """One chat completion for the trial. Returns timing + classification flags."""
     import time
+    if _is_anthropic_base(base):
+        started = time.monotonic()
+        status, body, reply, _error = _anthropic_message(base, api_key, model, full_input, TRIAL_MAX_TOKENS, TRIAL_TIMEOUT)
+        ms = int((time.monotonic() - started) * 1000)
+        ok = status is not None and status < 400
+        return {'ms': ms, 'ok_http': ok, 'rate_limited': status == 429,
+                'context_error': bool(status) and _is_context_error(status, body[:4000]),
+                'json_ok': ok and _parse_trial_json(reply), 'status': status}
     import httpx
     from backend.core.llm_providers import guarded_chat_kwargs, http_chat_body, token_param_kwargs
 

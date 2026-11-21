@@ -151,6 +151,7 @@ class LLMManager:
             "api88_api_key": "",
             "apimart_api_key": "",
             "seed_api_key": "",
+            "anthropic_api_key": "",
             "model_name": "qwen-plus",
             "chunk_size": 5000,
             "min_score_threshold": 0.7,
@@ -179,6 +180,7 @@ class LLMManager:
                             "api88_api_key": api_keys.get("api88", ""),
                             "apimart_api_key": api_keys.get("apimart", ""),
                             "seed_api_key": api_keys.get("seed", ""),
+                            "anthropic_api_key": api_keys.get("anthropic", ""),
                             "model_name": api.get("api_model", "qwen-plus")
                         })
                         # 设置页保存的提供商；旧版 settings.json 没有这个字段，保持 dashscope
@@ -229,6 +231,10 @@ class LLMManager:
                                     chunk_size=configured.chunk_size,
                                     min_score_threshold=configured.min_score_threshold,
                                     max_clips_per_collection=configured.max_clips_per_collection)
+            if _is_anthropic_connection(connection.provider):
+                # Native Claude: official SDK instead of the OpenAI-compatible client.
+                default_settings.update(llm_provider='anthropic', anthropic_api_key=endpoint['api_key'],
+                                        openai_api_key='', openai_base_url='')
         self._route_identity = route_identity  # kept off settings: settings.json is saved verbatim
         # Failed loads must remain retryable; never mark a broken assignment as loaded.
         self._settings_mtime = self._current_settings_mtime()
@@ -280,6 +286,7 @@ class LLMManager:
         "openai_api_key": ("API_OPENAI_API_KEY", "OPENAI_API_KEY"),
         "gemini_api_key": ("API_GEMINI_API_KEY", "GEMINI_API_KEY"),
         "siliconflow_api_key": ("API_SILICONFLOW_API_KEY", "SILICONFLOW_API_KEY"),
+        "anthropic_api_key": ("API_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
         "deepseek_api_key": ("API_DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"),
         "kimi_api_key": ("API_KIMI_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"),
         "glm_api_key": ("API_GLM_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"),
@@ -305,7 +312,8 @@ class LLMManager:
         env_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
         if env_provider and not file_has_provider:
             settings["llm_provider"] = env_provider
-        env_model = os.getenv("API_MODEL_NAME", "").strip() or os.getenv("LLM_MODEL", "").strip()
+        env_model = (os.getenv("API_MODEL_NAME", "").strip() or os.getenv("LLM_MODEL", "").strip()
+                     or os.getenv("CLAUDE_MODEL", "").strip())
         if env_model and not self._file_specifies("api_model", "model_name"):
             settings["model_name"] = env_model
 
@@ -430,6 +438,7 @@ class LLMManager:
             ProviderType.OPENAI: "openai_api_key",
             ProviderType.GEMINI: "gemini_api_key",
             ProviderType.SILICONFLOW: "siliconflow_api_key",
+            ProviderType.ANTHROPIC: "anthropic_api_key",
         }
         
         key_name = key_mapping.get(provider_type)
@@ -460,6 +469,7 @@ class LLMManager:
                 ProviderType.OPENAI: "openai_api_key",
                 ProviderType.GEMINI: "gemini_api_key",
                 ProviderType.SILICONFLOW: "siliconflow_api_key",
+            ProviderType.ANTHROPIC: "anthropic_api_key",
             }
             
             key_name = key_mapping.get(provider_type)
@@ -791,7 +801,8 @@ class LLMManager:
             ProviderType.DASHSCOPE: "阿里通义千问",
             ProviderType.OPENAI: "OpenAI / 兼容接口",
             ProviderType.GEMINI: "Google Gemini",
-            ProviderType.SILICONFLOW: "硅基流动"
+            ProviderType.SILICONFLOW: "硅基流动",
+            ProviderType.ANTHROPIC: "Anthropic Claude",
         }
         return display_names.get(provider_type, provider_type.value)
     
@@ -824,6 +835,15 @@ class LLMManager:
         from ..utils.llm_client import LLMClient
         temp_client = LLMClient()
         return temp_client.parse_json_response(response)
+
+def _is_anthropic_connection(provider: Optional[str]) -> bool:
+    """Connections whose preset speaks the official Anthropic Messages API."""
+    if (provider or "").strip().lower() == "anthropic":
+        return True
+    from backend.core.provider_presets import get_provider
+    preset = get_provider(provider)
+    return bool(preset and preset.id == "anthropic")
+
 
 def note_same_provider_degrade() -> int:
     """Increment the run/request ``degrade_count``. Safe if telemetry is absent."""
